@@ -1,5 +1,5 @@
 from flask.sessions import SessionInterface as FlaskSessionInterface
-from flask_multi_session.backends import SecureCookieSessionInterface, FirestoreSessionInterface
+from flask_session_plus.backends import SecureCookieSessionInterface, FirestoreSessionInterface
 
 
 class MultiSessionInterface(FlaskSessionInterface):

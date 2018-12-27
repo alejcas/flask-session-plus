@@ -10,7 +10,7 @@ from pytz import utc
 from flask.sessions import SecureCookieSession
 from flask.sessions import SessionInterface as FlaskSessionInterface
 from itsdangerous import BadSignature, want_bytes, Signer, URLSafeTimedSerializer
-from flask_multi_session.core import ServerSideSession
+from flask_session_plus.core import ServerSideSession
 
 log = logging.getLogger(__name__)
 
