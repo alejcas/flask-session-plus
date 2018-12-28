@@ -78,22 +78,51 @@ class CallbackDict(UpdateDictMixin, dict):
         )
 
 
-class ServerSideSession(CallbackDict, SessionMixin):
-    """ Baseclass for server-side based sessions.
+class MultiSession(CallbackDict, SessionMixin):
+    """ Baseclass for Multi Sessions based sessions.
         Tracks the keys that were modified
     """
+
+    modified = False
+    accessed = False
 
     def __init__(self, initial=None, sid=None, permanent=None):
         def on_update(self, updated_key):
             self.modified = True
+            self.accessed = True
             self.tracked_status.add(updated_key)
 
-        CallbackDict.__init__(self, initial, on_update)
-        self.sid = sid
+        super(MultiSession, self).__init__(initial, on_update)
+        sid = sid or {}  # sid is a dict of {'cookie_name': sid}
+        if not isinstance(sid, dict):
+            raise ValueError("sid must be always a dict of {'cookie_name': sid}")
+        self._sid = sid
         if permanent:
             self.permanent = permanent
         self.modified = False
         self.tracked_status = set()
 
+    @property
+    def sid(self):
+        return self._sid
 
+    @sid.setter
+    def sid(self, value):
+        if not isinstance(value, dict):
+            raise ValueError("sid must be always a dict of {'cookie_name': sid}")
+        self._sid.update(value)
 
+    def get_sid(self, cookie_name):
+        return self._sid.get(cookie_name)
+
+    def __getitem__(self, key):
+        self.accessed = True
+        return super(MultiSession, self).__getitem__(key)
+
+    def get(self, key, default=None):
+        self.accessed = True
+        return super(MultiSession, self).get(key, default)
+
+    def setdefault(self, key, default=None):
+        self.accessed = True
+        return super(MultiSession, self).setdefault(key, default)

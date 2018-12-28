@@ -1,5 +1,6 @@
 from flask.sessions import SessionInterface as FlaskSessionInterface
 from flask_session_plus.backends import SecureCookieSessionInterface, FirestoreSessionInterface
+from flask_session_plus.core import MultiSession
 
 
 class MultiSessionInterface(FlaskSessionInterface):
@@ -34,10 +35,21 @@ class MultiSessionInterface(FlaskSessionInterface):
             return new_session
 
     def open_session(self, app, request):
+        """ Opens all the inner session interfaces and integrates all the sessions into one """
+        common_dict = {}
+        session_sids = {}
         for si, _ in self.session_interfaces:
-            si.open_session(app, request)
+            session = si.open_session(app, request)
+            # 1st: update dict values
+            common_dict.update(dict(session))
+            # 2nd: integrate session sid if available
+            session_sids[si.cookie_name] = session.get_sid(si.cookie_name)
+        multi_session = MultiSession(common_dict)
+        multi_session.sid = common_dict
+        return multi_session
 
     def save_session(self, app, session, response):
+        """ Saves all session info into each of the session interfaces """
         for si, session_fields in self.session_interfaces:
             interface_session = self.get_session_for(si, session, session_fields)
             si.save_session(app, interface_session, response)

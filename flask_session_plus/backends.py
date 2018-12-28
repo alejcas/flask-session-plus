@@ -1,5 +1,4 @@
 import logging
-import json
 from datetime import datetime
 from uuid import uuid4
 import hashlib
@@ -7,10 +6,9 @@ import hashlib
 from flask.helpers import total_seconds
 from flask.json.tag import TaggedJSONSerializer
 from pytz import utc
-from flask.sessions import SecureCookieSession
 from flask.sessions import SessionInterface as FlaskSessionInterface
 from itsdangerous import BadSignature, want_bytes, Signer, URLSafeTimedSerializer
-from flask_session_plus.core import ServerSideSession
+from flask_session_plus.core import MultiSession
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +74,7 @@ class SecureCookieSessionInterface(BaseSessionInterface):
     #: JSON derived serializer with support for some extra Python types
     #: such as datetime objects or tuples.
     serializer = session_json_serializer
-    session_class = SecureCookieSession
+    session_class = MultiSession
 
     def get_signing_serializer(self, app):
         if not app.secret_key:
@@ -150,7 +148,7 @@ class SecureCookieSessionInterface(BaseSessionInterface):
 class BackendSessionInterface(BaseSessionInterface):
     """ A common Session Interface for all backend Interfaces """
 
-    session_class = ServerSideSession
+    session_class = MultiSession
 
     def _generate_sid(self):
         return str(uuid4())
@@ -171,7 +169,7 @@ class BackendSessionInterface(BaseSessionInterface):
 class FirestoreSessionInterface(BackendSessionInterface):
     """ A Session interface that uses Google Cloud Firestore as backend. """
 
-    serializer = json
+    # serializer = session_json_serializer
 
     def __init__(self, client, collection, key_prefix='session', use_signer=False, **kwargs):
         """
@@ -203,7 +201,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
         sid = request.cookies.get(self.cookie_name)
         if not sid:
             sid = self._generate_sid()
-            return self.session_class(sid=sid)
+            return self.session_class(sid={self.cookie_name: sid})
         if self.use_signer:
             signer = self._get_signer(app)
             if signer is None:
@@ -213,7 +211,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
                 sid = sid_as_bytes.decode()
             except BadSignature:
                 sid = self._generate_sid()
-                return self.session_class(sid=sid)
+                return self.session_class(sid={self.cookie_name: sid})
 
         store_id = self.key_prefix + sid
         try:
@@ -232,10 +230,10 @@ class FirestoreSessionInterface(BackendSessionInterface):
                 # val = document['val']
                 # data = self.serializer.loads(want_bytes(val))
                 data = document
-                return self.session_class(data, sid=sid)
+                return self.session_class(data, sid={self.cookie_name: sid})
             except:
-                return self.session_class(sid=sid)
-        return self.session_class(sid=sid)
+                return self.session_class(sid={self.cookie_name: sid})
+        return self.session_class(sid={self.cookie_name: sid})
 
     def save_session(self, app, session, response):
         if self.cookie_domain is not None:
@@ -246,7 +244,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
 
         if not session:
             if session.modified:
-                self._delete_session_from_store(self.key_prefix + session.sid)
+                self._delete_session_from_store(self.key_prefix + session.get_sid(self.cookie_name))
                 response.delete_cookie(self.cookie_name, domain=domain, path=path)
             return
 
@@ -256,7 +254,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
 
         if session.modified:
             # The session was modified
-            store_id = self.key_prefix + session.sid
+            store_id = self.key_prefix + session.get_sid(self.cookie_name)
             # val = self.serializer.dumps(dict(session))
             val = {'_expiration': expires}
             val.update(dict(session))
@@ -270,9 +268,9 @@ class FirestoreSessionInterface(BackendSessionInterface):
                 log.error(f'Error while updating session (session id: {store_id}): {e}')
 
         if self.use_signer:
-            session_id = self._get_signer(app).sign(want_bytes(session.sid))
+            session_id = self._get_signer(app).sign(want_bytes(session.get_sid(self.cookie_name)))
         else:
-            session_id = session.sid
+            session_id = session.get_sid(self.cookie_name)
         response.set_cookie(self.cookie_name, session_id,
                             expires=expires, httponly=httponly,
                             domain=domain, path=path, secure=secure)
