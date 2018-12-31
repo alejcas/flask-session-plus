@@ -97,8 +97,9 @@ class MultiSession(CallbackDict, SessionMixin):
         if not isinstance(sid, dict):
             raise ValueError("sid must be always a dict of {'cookie_name': sid}")
         self._sid = sid
-        if permanent:
-            self.permanent = permanent
+        self._permanent = set()  # store the cookie names that are permanent sessions
+        if permanent is not None:
+            self._permanent.add(permanent)
         self.modified = False
         self.tracked_status = set()
 
@@ -126,3 +127,13 @@ class MultiSession(CallbackDict, SessionMixin):
     def setdefault(self, key, default=None):
         self.accessed = True
         return super(MultiSession, self).setdefault(key, default)
+
+    def is_permanent(self, cookie_name):
+        return cookie_name in self._permanent
+
+    def set_permanent(self, cookie_name, remove=False):
+        if remove:
+            if cookie_name in self._permanent:
+                self._permanent.remove(cookie_name)
+        else:
+            self._permanent.add(cookie_name)

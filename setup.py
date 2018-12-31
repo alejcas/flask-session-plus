@@ -2,6 +2,9 @@ import os
 from setuptools import setup, find_packages
 
 
+VERSION = '0.0.3'
+
+
 def read(fname):
     """ Returns the contents of the fname file """
     with open(os.path.join(os.path.dirname(__file__), fname), 'r') as file:
@@ -30,7 +33,7 @@ requires = ['Flask']
 
 setup(
     name='flask-session-plus',
-    version='0.0.1',
+    version=VERSION,
     packages=find_packages(),
     url='https://github.com/janscas/flask-session-plus',
     license='Mit License',

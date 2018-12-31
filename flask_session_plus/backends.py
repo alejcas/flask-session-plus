@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 import hashlib
 
@@ -16,16 +16,18 @@ log = logging.getLogger(__name__)
 class BaseSessionInterface(FlaskSessionInterface):
     """ Base Session Interface """
 
-    def __init__(self, cookie_name, session_lifetime=None, cookie_domain=None,
+    def __init__(self, cookie_name, cookie_max_age=None, cookie_domain=None,
                  cookie_path=None, cookie_httponly=True, cookie_secure=False,
-                 cookie_samesite=None, refresh_on_request=True, **kwargs):
+                 cookie_samesite=None, session_lifetime=None,
+                 refresh_on_request=True, **kwargs):
         self.cookie_name = cookie_name
-        self.session_lifetime = session_lifetime
+        self.cookie_max_age = cookie_max_age
         self.cookie_domain = cookie_domain
         self.cookie_path = cookie_path
         self.cookie_httponly = cookie_httponly
         self.cookie_secure = cookie_secure
         self.cookie_samesite = cookie_samesite
+        self.session_lifetime = session_lifetime or timedelta(days=1)
         self.refresh_on_request = refresh_on_request
 
     def get_expiration_time(self, app, session):
@@ -34,7 +36,10 @@ class BaseSessionInterface(FlaskSessionInterface):
         default implementation returns now + the permanent session
         lifetime configured on the application.
         """
-        return None if self.session_lifetime is None else datetime.utcnow() + self.session_lifetime
+        if session.is_permanent(self.cookie_name):
+            return datetime.utcnow() + timedelta(days=31)
+        else:
+            return datetime.utcnow() + self.session_lifetime
 
     def should_set_cookie(self, app, session):
         """Used by session backends to determine if a ``Set-Cookie`` header
@@ -66,7 +71,7 @@ class SecureCookieSessionInterface(BaseSessionInterface):
     #: signing of cookie based sessions.
     salt = 'cookie-session'
     #: the hash function to use for the signature.  The default is sha1
-    digest_method = staticmethod(hashlib.sha1)
+    digest_method = staticmethod(hashlib.sha3_256)
     #: the name of the itsdangerous supported key derivation.  The default
     #: is hmac.
     key_derivation = 'hmac'
@@ -75,6 +80,20 @@ class SecureCookieSessionInterface(BaseSessionInterface):
     #: such as datetime objects or tuples.
     serializer = session_json_serializer
     session_class = MultiSession
+
+    def get_expiration_time(self, app, session):
+        """A helper method that returns an expiration date for the session
+        or ``None`` if the session is linked to the browser session.  The
+        default implementation returns now + the permanent session
+        lifetime configured on the application.
+        """
+        if session.is_permanent(self.cookie_name):
+            return datetime.utcnow() + timedelta(days=31)
+        else:
+            if self.cookie_max_age is not None:
+                return datetime.utcnow() + timedelta(seconds=self.cookie_max_age)
+            else:
+                return None
 
     def get_signing_serializer(self, app):
         if not app.secret_key:
@@ -94,7 +113,8 @@ class SecureCookieSessionInterface(BaseSessionInterface):
         val = request.cookies.get(self.cookie_name)
         if not val:
             return self.session_class()
-        max_age = total_seconds(self.session_lifetime)
+        max_age = self.cookie_max_age or None
+
         try:
             data = s.loads(val, max_age=max_age)
             return self.session_class(data)
@@ -134,7 +154,7 @@ class SecureCookieSessionInterface(BaseSessionInterface):
         expires = self.get_expiration_time(app, session)
         val = self.get_signing_serializer(app).dumps(dict(session))
         response.set_cookie(
-            app.session_cookie_name,
+            self.cookie_name,
             val,
             expires=expires,
             httponly=httponly,
@@ -179,6 +199,8 @@ class FirestoreSessionInterface(BackendSessionInterface):
         :param use_signer: Whether to sign the session id cookie or not.
         :param kwargs: extra params to the base class
         """
+        if 'session_lifetime' not in kwargs:
+            kwargs['session_lifetime'] = timedelta(days=1)  # by default the session lasts 1 day.
         super(FirestoreSessionInterface, self).__init__(**kwargs)
         if client is None:
             from google.cloud import firestore
@@ -230,7 +252,8 @@ class FirestoreSessionInterface(BackendSessionInterface):
                 # val = document['val']
                 # data = self.serializer.loads(want_bytes(val))
                 data = document
-                return self.session_class(data, sid={self.cookie_name: sid})
+                permanent = self.cookie_name if data.pop('_permanent', None) else None
+                return self.session_class(data, sid={self.cookie_name: sid}, permanent=permanent)
             except:
                 return self.session_class(sid={self.cookie_name: sid})
         return self.session_class(sid={self.cookie_name: sid})
@@ -256,7 +279,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
             # The session was modified
             store_id = self.key_prefix + session.get_sid(self.cookie_name)
             # val = self.serializer.dumps(dict(session))
-            val = {'_expiration': expires}
+            val = {'_expiration': expires, '_permanent': session.is_permanent(self.cookie_name)}
             val.update(dict(session))
             try:
                 # self.store.document(store_id).set({

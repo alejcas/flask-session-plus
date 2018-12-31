@@ -6,6 +6,24 @@ from flask_session_plus.core import MultiSession
 class MultiSessionInterface(FlaskSessionInterface):
 
     def __init__(self, sessions_config):
+        all_includes = []  # store all the defined includes
+        check_auto = []  # store any 'session_fields' auto
+        for i, session_conf in enumerate(sessions_config):
+            session_fields = session_conf.get('session_fields')
+            if session_fields is None:
+                continue
+            if isinstance(session_fields, dict):
+                all_includes.extend(session_fields.get('include', []))
+            elif isinstance(session_fields, list):
+                all_includes.extend(session_fields)
+            elif isinstance(session_fields, str) and session_fields == 'auto':
+                check_auto.append(i)
+            else:
+                raise ValueError('session_fields type is incorrect')
+
+        for auto in check_auto:
+            sessions_config[auto]['session_fields'] = {'exclude': all_includes}
+
         self.session_interfaces = []
         for session_conf in sessions_config:
             session_fields = session_conf.get('session_fields')
@@ -18,21 +36,34 @@ class MultiSessionInterface(FlaskSessionInterface):
     @staticmethod
     def get_session_for(session_interface, session, session_fields):
         """ Returns all the sessions configured """
-        if len(session_fields) == 0:
-            return session
-            # # all the fields are forward to the interface
-            # for key, value in session.items():
-            #     new_dict[key] = value
+
+        if isinstance(session_fields, dict):
+            include = session_fields.get('include', [])
+            exclude = session_fields.get('exclude', [])
         else:
-            new_dict = {}
-            modified = False
-            for field in session_fields:
-                value = session.get(field)
-                new_dict[field] = value
-                modified = modified or field in session.tracked_status
-            new_session = session_interface.session_class(new_dict)
-            new_session.modified = modified
-            return new_session
+            include = session_fields
+            exclude = []
+
+        new_dict = {}
+        if len(include) == 0:
+            new_dict = dict(session)
+        else:
+            for field in include:
+                if field in session:
+                    new_dict[field] = session.get(field)
+
+        for field in exclude:
+            new_dict.pop(field, None)
+
+        modified = False
+        for field in new_dict:
+            modified = modified or field in session.tracked_status
+
+        new_session = session_interface.session_class(new_dict)
+        new_session.modified = modified
+        cookie_name = session_interface.cookie_name
+        new_session.sid = {cookie_name: session.get_sid(cookie_name)}
+        return new_session
 
     def open_session(self, app, request):
         """ Opens all the inner session interfaces and integrates all the sessions into one """
@@ -40,12 +71,13 @@ class MultiSessionInterface(FlaskSessionInterface):
         session_sids = {}
         for si, _ in self.session_interfaces:
             session = si.open_session(app, request)
-            # 1st: update dict values
-            common_dict.update(dict(session))
-            # 2nd: integrate session sid if available
-            session_sids[si.cookie_name] = session.get_sid(si.cookie_name)
+            if session is not None:
+                # 1st: update dict values
+                common_dict.update(dict(session))
+                # 2nd: integrate session sid if available
+                session_sids[si.cookie_name] = session.get_sid(si.cookie_name)
         multi_session = MultiSession(common_dict)
-        multi_session.sid = common_dict
+        multi_session.sid = session_sids
         return multi_session
 
     def save_session(self, app, session, response):
@@ -56,10 +88,6 @@ class MultiSessionInterface(FlaskSessionInterface):
 
 
 class Session(object):
-
-    session_types = {
-        'secure_cookie': ''
-    }
 
     def __init__(self, app=None):
         self.app = app
