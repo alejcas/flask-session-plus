@@ -56,19 +56,24 @@ class MultiSessionInterface(FlaskSessionInterface):
             new_dict.pop(field, None)
 
         modified = False
-        for field in new_dict:
+        for field in include:
             modified = modified or field in session.tracked_status
+            if modified:
+                break
 
-        new_session = session_interface.session_class(new_dict)
-        new_session.modified = modified
+        new_session = session_interface.session_class(new_dict)  # new session
+        new_session.modified = modified  # assign modified flag
         cookie_name = session_interface.cookie_name
-        new_session.sid = {cookie_name: session.get_sid(cookie_name)}
+        new_session.sid = {cookie_name: session.get_sid(cookie_name)}  # assign session id
+        if session.is_permanent(session_interface.cookie_name):
+            new_session.set_permanent(session_interface.cookie_name)  # assign permanent status
         return new_session
 
     def open_session(self, app, request):
         """ Opens all the inner session interfaces and integrates all the sessions into one """
         common_dict = {}
         session_sids = {}
+        permanents = set()
         for si, _ in self.session_interfaces:
             session = si.open_session(app, request)
             if session is not None:
@@ -76,8 +81,12 @@ class MultiSessionInterface(FlaskSessionInterface):
                 common_dict.update(dict(session))
                 # 2nd: integrate session sid if available
                 session_sids[si.cookie_name] = session.get_sid(si.cookie_name)
-        multi_session = MultiSession(common_dict)
-        multi_session.sid = session_sids
+                # 3rd: add permanent status
+                if session.is_permanent(si.cookie_name):
+                    permanents.add(si.cookie_name)
+        multi_session = MultiSession(common_dict, sid=session_sids)
+        for cookie_name in permanents:
+            multi_session.set_permanent(cookie_name)
         return multi_session
 
     def save_session(self, app, session, response):

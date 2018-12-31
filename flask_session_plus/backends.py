@@ -41,6 +41,20 @@ class BaseSessionInterface(FlaskSessionInterface):
         else:
             return datetime.utcnow() + self.session_lifetime
 
+    def get_cookie_expiration_time(self, app, session):
+        """A helper method that returns an expiration date for the session
+        or ``None`` if the session is linked to the browser session.  The
+        default implementation returns now + the permanent session
+        lifetime configured on the application.
+        """
+        if session.is_permanent(self.cookie_name):
+            return datetime.utcnow() + timedelta(days=31)
+        else:
+            if self.cookie_max_age is not None:
+                return datetime.utcnow() + timedelta(seconds=self.cookie_max_age)
+            else:
+                return None
+
     def should_set_cookie(self, app, session):
         """Used by session backends to determine if a ``Set-Cookie`` header
         should be set for this session cookie for this response. If the session
@@ -80,20 +94,6 @@ class SecureCookieSessionInterface(BaseSessionInterface):
     #: such as datetime objects or tuples.
     serializer = session_json_serializer
     session_class = MultiSession
-
-    def get_expiration_time(self, app, session):
-        """A helper method that returns an expiration date for the session
-        or ``None`` if the session is linked to the browser session.  The
-        default implementation returns now + the permanent session
-        lifetime configured on the application.
-        """
-        if session.is_permanent(self.cookie_name):
-            return datetime.utcnow() + timedelta(days=31)
-        else:
-            if self.cookie_max_age is not None:
-                return datetime.utcnow() + timedelta(seconds=self.cookie_max_age)
-            else:
-                return None
 
     def get_signing_serializer(self, app):
         if not app.secret_key:
@@ -151,7 +151,7 @@ class SecureCookieSessionInterface(BaseSessionInterface):
         httponly = self.cookie_httponly or self.get_cookie_httponly(app)
         secure = self.cookie_secure or self.get_cookie_secure(app)
         samesite = self.cookie_samesite or self.get_cookie_samesite(app)
-        expires = self.get_expiration_time(app, session)
+        expires = self.get_cookie_expiration_time(app, session)
         val = self.get_signing_serializer(app).dumps(dict(session))
         response.set_cookie(
             self.cookie_name,
@@ -294,6 +294,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
             session_id = self._get_signer(app).sign(want_bytes(session.get_sid(self.cookie_name)))
         else:
             session_id = session.get_sid(self.cookie_name)
+        cookie_expires = self.get_cookie_expiration_time(app, session)
         response.set_cookie(self.cookie_name, session_id,
-                            expires=expires, httponly=httponly,
+                            expires=cookie_expires, httponly=httponly,
                             domain=domain, path=path, secure=secure)
