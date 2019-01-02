@@ -237,6 +237,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
 
         store_id = self.key_prefix + sid
         try:
+            log.debug('Getting document from db')
             document = self.store.document(store_id).get()
             document = document.to_dict() if document.exists else None
         except Exception as e:
@@ -249,8 +250,6 @@ class FirestoreSessionInterface(BackendSessionInterface):
             document = None
         if document is not None:
             try:
-                # val = document['val']
-                # data = self.serializer.loads(want_bytes(val))
                 data = document
                 permanent = self.cookie_name if data.pop('_permanent', None) else None
                 return self.session_class(data, sid={self.cookie_name: sid}, permanent=permanent)
@@ -282,10 +281,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
             val = {'_expiration': expires, '_permanent': session.is_permanent(self.cookie_name)}
             val.update(dict(session))
             try:
-                # self.store.document(store_id).set({
-                #     'val': val,
-                #     '_expiration': expires
-                # })
+                log.debug('Setting document to db')
                 self.store.document(store_id).set(val)
             except Exception as e:
                 log.error(f'Error while updating session (session id: {store_id}): {e}')
