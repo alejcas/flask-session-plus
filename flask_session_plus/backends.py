@@ -1,4 +1,6 @@
 import logging
+import sys
+import time
 from datetime import datetime, timedelta
 from uuid import uuid4
 import hashlib
@@ -11,6 +13,12 @@ from itsdangerous import BadSignature, want_bytes, Signer, URLSafeTimedSerialize
 from flask_session_plus.core import MultiSession
 
 log = logging.getLogger(__name__)
+
+PY2 = sys.version_info[0] == 2
+if not PY2:
+    text_type = str
+else:
+    text_type = unicode
 
 
 class BaseSessionInterface(FlaskSessionInterface):
@@ -170,6 +178,11 @@ class BackendSessionInterface(BaseSessionInterface):
 
     session_class = MultiSession
 
+    def __init__(self, *args, **kwargs):
+        if 'session_lifetime' not in kwargs:
+            kwargs['session_lifetime'] = timedelta(days=1)  # by default the session lasts 1 day.
+        super(BackendSessionInterface, self).__init__(*args, **kwargs)
+
     def _generate_sid(self):
         return str(uuid4())
 
@@ -189,18 +202,14 @@ class BackendSessionInterface(BaseSessionInterface):
 class FirestoreSessionInterface(BackendSessionInterface):
     """ A Session interface that uses Google Cloud Firestore as backend. """
 
-    # serializer = session_json_serializer
-
     def __init__(self, client, collection, key_prefix='session', use_signer=False, **kwargs):
         """
-        :param client: A ``firestore.Client`` instance.
+        :param client: A 'firestore.Client' instance.
         :param collection: The collection you want to use.
-        :param key_prefix: A prefix that is added to all Firestore store keys.
+        :param key_prefix: A prefix that is added to all session store keys.
         :param use_signer: Whether to sign the session id cookie or not.
         :param kwargs: extra params to the base class
         """
-        if 'session_lifetime' not in kwargs:
-            kwargs['session_lifetime'] = timedelta(days=1)  # by default the session lasts 1 day.
         super(FirestoreSessionInterface, self).__init__(**kwargs)
         if client is None:
             from google.cloud import firestore
@@ -241,7 +250,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
             document = self.store.document(store_id).get()
             document = document.to_dict() if document.exists else None
         except Exception as e:
-            log.error(f'Error while retrieving session from firestore (session id: {store_id}): {e}')
+            log.error(f'Error while retrieving session from db (session id: {store_id}): {e}')
             # treat as session expired.
             document = None
         if document and document.pop('_expiration') <= datetime.utcnow().replace(tzinfo=utc):
@@ -277,12 +286,351 @@ class FirestoreSessionInterface(BackendSessionInterface):
         if session.modified:
             # The session was modified
             store_id = self.key_prefix + session.get_sid(self.cookie_name)
-            # val = self.serializer.dumps(dict(session))
             val = {'_expiration': expires, '_permanent': session.is_permanent(self.cookie_name)}
             val.update(dict(session))
             try:
                 log.debug('Setting document to db')
                 self.store.document(store_id).set(val)
+            except Exception as e:
+                log.error(f'Error while updating session (session id: {store_id}): {e}')
+
+        if self.use_signer:
+            session_id = self._get_signer(app).sign(want_bytes(session.get_sid(self.cookie_name)))
+        else:
+            session_id = session.get_sid(self.cookie_name)
+        cookie_expires = self.get_cookie_expiration_time(app, session)
+        response.set_cookie(self.cookie_name, session_id,
+                            expires=cookie_expires, httponly=httponly,
+                            domain=domain, path=path, secure=secure)
+
+
+class RedisSessionInterface(BackendSessionInterface):
+    """ A Session interface that uses Redis as backend. """
+
+    serializer = session_json_serializer
+
+    def __init__(self, client, key_prefix='session', use_signer=False, **kwargs):
+        """
+        :param redis: A 'redis.Redis' instance.
+        :param key_prefix: A prefix that is added to all session store keys.
+        :param use_signer: Whether to sign the session id cookie or not.
+        :param kwargs: extra params to the base class
+        """
+        super(RedisSessionInterface, self).__init__(**kwargs)
+        if client is None:
+            from redis import Redis
+            client = Redis()
+        self.client = client
+        self.key_prefix = key_prefix
+        self.use_signer = use_signer
+
+    def _delete_session_from_store(self, store_id):
+        """ Deletes the session from the store """
+        try:
+            self.client.delete(store_id)
+        except Exception as e:
+            log.error(f'Error while deleting expired session (session id: {store_id}): {e}')
+            return False
+        return True
+
+    def open_session(self, app, request):
+        sid = request.cookies.get(self.cookie_name)
+        if not sid:
+            sid = self._generate_sid()
+            return self.session_class(sid={self.cookie_name: sid})
+        if self.use_signer:
+            signer = self._get_signer(app)
+            if signer is None:
+                return None
+            try:
+                sid_as_bytes = signer.unsign(sid)
+                sid = sid_as_bytes.decode()
+            except BadSignature:
+                sid = self._generate_sid()
+                return self.session_class(sid={self.cookie_name: sid})
+
+        if not PY2 and not isinstance(sid, text_type):
+            sid = sid.decode('utf-8', 'strict')
+
+        store_id = self.key_prefix + sid
+        try:
+            log.debug('Getting document from db')
+            val = self.client.get(store_id)
+        except Exception as e:
+            log.error(f'Error while retrieving session from db (session id: {store_id}): {e}')
+            # treat as session expired.
+            val = None
+
+        if val is not None:
+            data = self.serializer.loads(val)
+        else:
+            data = None
+
+        if data is not None:
+            try:
+                permanent = self.cookie_name if data.pop('_permanent', None) else None
+                return self.session_class(data, sid={self.cookie_name: sid}, permanent=permanent)
+            except:
+                return self.session_class(sid={self.cookie_name: sid})
+        return self.session_class(sid={self.cookie_name: sid})
+
+    def save_session(self, app, session, response):
+        if self.cookie_domain is not None:
+            domain = self.cookie_domain if self.cookie_domain else self.get_cookie_domain(app)
+        else:
+            domain = self.get_cookie_domain(app)
+        path = self.cookie_path or self.get_cookie_path(app)
+
+        if not session:
+            if session.modified:
+                self._delete_session_from_store(self.key_prefix + session.get_sid(self.cookie_name))
+                response.delete_cookie(self.cookie_name, domain=domain, path=path)
+            return
+
+        httponly = self.cookie_httponly or self.get_cookie_httponly(app)
+        secure = self.cookie_secure or self.get_cookie_secure(app)
+        expires = self.get_expiration_time(app, session)
+
+        if session.modified:
+            # The session was modified
+            store_id = self.key_prefix + session.get_sid(self.cookie_name)
+            data = {'_permanent': session.is_permanent(self.cookie_name)}
+            data.update(dict(session))
+            val = self.serializer.dumps(data)
+            try:
+                log.debug('Setting document to db')
+                self.client.setex(name=store_id, value=val, time=total_seconds(expires))
+            except Exception as e:
+                log.error(f'Error while updating session (session id: {store_id}): {e}')
+
+        if self.use_signer:
+            session_id = self._get_signer(app).sign(want_bytes(session.get_sid(self.cookie_name)))
+        else:
+            session_id = session.get_sid(self.cookie_name)
+        cookie_expires = self.get_cookie_expiration_time(app, session)
+        response.set_cookie(self.cookie_name, session_id,
+                            expires=cookie_expires, httponly=httponly,
+                            domain=domain, path=path, secure=secure)
+
+
+class MongoDBSessionInterface(BackendSessionInterface):
+    """ A Session interface that uses MongoDB as backend. """
+
+    serializer = session_json_serializer
+
+    def __init__(self, client, db, collection, key_prefix='session', use_signer=False, **kwargs):
+        """
+        :param client: A 'pymongo.MongoClient' instance.
+        :param db: The database you want to use.
+        :param collection: The collection you want to use.
+        :param key_prefix: A prefix that is added to all session store keys.
+        :param use_signer: Whether to sign the session id cookie or not.
+        :param kwargs: extra params to the base class
+        """
+        super(MongoDBSessionInterface, self).__init__(**kwargs)
+        if client is None:
+            from pymongo import MongoClient
+            client = MongoClient()
+        self.client = client
+        self.db = db
+        self.store = client[db][collection]
+        self.key_prefix = key_prefix
+        self.use_signer = use_signer
+
+    def _delete_session_from_store(self, store_id):
+        """ Deletes the session from the store """
+        try:
+            self.store.remove({'id': store_id})
+        except Exception as e:
+            log.error(f'Error while deleting expired session (session id: {store_id}): {e}')
+            return False
+        return True
+
+    def open_session(self, app, request):
+        sid = request.cookies.get(self.cookie_name)
+        if not sid:
+            sid = self._generate_sid()
+            return self.session_class(sid={self.cookie_name: sid})
+        if self.use_signer:
+            signer = self._get_signer(app)
+            if signer is None:
+                return None
+            try:
+                sid_as_bytes = signer.unsign(sid)
+                sid = sid_as_bytes.decode()
+            except BadSignature:
+                sid = self._generate_sid()
+                return self.session_class(sid={self.cookie_name: sid})
+
+        store_id = self.key_prefix + sid
+        try:
+            log.debug('Getting document from db')
+            document = self.store.find_one({'id': store_id})
+        except Exception as e:
+            log.error(f'Error while retrieving session from db (session id: {store_id}): {e}')
+            # treat as session expired.
+            document = None
+        if document and document.pop('_expiration') <= datetime.utcnow().replace(tzinfo=utc):
+            # Delete expired session
+            self._delete_session_from_store(store_id)
+            document = None
+        if document is not None:
+            try:
+                val = document['val']
+                data = self.serializer.loads(want_bytes(val))
+                permanent = self.cookie_name if document.pop('_permanent', None) else None
+                return self.session_class(data, sid={self.cookie_name: sid}, permanent=permanent)
+            except:
+                return self.session_class(sid={self.cookie_name: sid})
+        return self.session_class(sid={self.cookie_name: sid})
+
+    def save_session(self, app, session, response):
+        if self.cookie_domain is not None:
+            domain = self.cookie_domain if self.cookie_domain else self.get_cookie_domain(app)
+        else:
+            domain = self.get_cookie_domain(app)
+        path = self.cookie_path or self.get_cookie_path(app)
+
+        if not session:
+            if session.modified:
+                self._delete_session_from_store(self.key_prefix + session.get_sid(self.cookie_name))
+                response.delete_cookie(self.cookie_name, domain=domain, path=path)
+            return
+
+        httponly = self.cookie_httponly or self.get_cookie_httponly(app)
+        secure = self.cookie_secure or self.get_cookie_secure(app)
+        expires = self.get_expiration_time(app, session)
+
+        if session.modified:
+            # The session was modified
+            store_id = self.key_prefix + session.get_sid(self.cookie_name)
+            val = self.serializer.dumps(dict(session))
+            try:
+                log.debug('Setting document to db')
+                self.store.update({'id': store_id},
+                                  {'id': store_id,
+                                   'val': val,
+                                   '_expiration': expires,
+                                   '_permanent': session.is_permanent(self.cookie_name)}, True)
+            except Exception as e:
+                log.error(f'Error while updating session (session id: {store_id}): {e}')
+
+        if self.use_signer:
+            session_id = self._get_signer(app).sign(want_bytes(session.get_sid(self.cookie_name)))
+        else:
+            session_id = session.get_sid(self.cookie_name)
+        cookie_expires = self.get_cookie_expiration_time(app, session)
+        response.set_cookie(self.cookie_name, session_id,
+                            expires=cookie_expires, httponly=httponly,
+                            domain=domain, path=path, secure=secure)
+
+
+class MemcachedSessionInterface(BackendSessionInterface):
+    """ A Session interface that uses Memcached as backend. """
+
+    serializer = session_json_serializer
+
+    def __init__(self, client, key_prefix='session', use_signer=False, **kwargs):
+        """
+        :param client: A 'memcache.Client' instance.
+        :param key_prefix: A prefix that is added to all session store keys.
+        :param use_signer: Whether to sign the session id cookie or not.
+        :param kwargs: extra params to the base class
+
+        """
+        super(MemcachedSessionInterface, self).__init__(**kwargs)
+        if client is None:
+            raise ValueError('Must provide a valid memcache Client instance')
+        self.client = client
+        self.key_prefix = key_prefix
+        self.use_signer = use_signer
+
+    @staticmethod
+    def _get_memcache_timeout(timeout):
+        """
+        from Flask-session:
+        Memcached deals with long (> 30 days) timeouts in a special
+        way. Call this function to obtain a safe value for your timeout.
+        """
+        if timeout > 2592000:  # 60*60*24*30, 30 days
+            # See http://code.google.com/p/memcached/wiki/FAQ
+            # "You can set expire times up to 30 days in the future. After that
+            # memcached interprets it as a date, and will expire the item after
+            # said date. This is a simple (but obscure) mechanic."
+            #
+            # This means that we have to switch to absolute timestamps.
+            timeout += int(time.time())
+        return timeout
+
+    def open_session(self, app, request):
+        sid = request.cookies.get(self.cookie_name)
+        if not sid:
+            sid = self._generate_sid()
+            return self.session_class(sid={self.cookie_name: sid})
+        if self.use_signer:
+            signer = self._get_signer(app)
+            if signer is None:
+                return None
+            try:
+                sid_as_bytes = signer.unsign(sid)
+                sid = sid_as_bytes.decode()
+            except BadSignature:
+                sid = self._generate_sid()
+                return self.session_class(sid={self.cookie_name: sid})
+
+        store_id = self.key_prefix + sid
+        if PY2 and isinstance(store_id, unicode):
+            store_id = store_id.encode('utf-8')
+        try:
+            log.debug('Getting document from db')
+            val = self.client.get(store_id)
+        except Exception as e:
+            log.error(f'Error while retrieving session from db (session id: {store_id}): {e}')
+            # treat as session expired.
+            val = None
+        if val is not None:
+            try:
+                if not PY2:
+                    val = want_bytes(val)
+                data = self.serializer.loads(val)
+                permanent = self.cookie_name if data.pop('_permanent', None) else None
+                return self.session_class(data, sid={self.cookie_name: sid}, permanent=permanent)
+            except:
+                return self.session_class(sid={self.cookie_name: sid})
+        return self.session_class(sid={self.cookie_name: sid})
+
+    def save_session(self, app, session, response):
+        if self.cookie_domain is not None:
+            domain = self.cookie_domain if self.cookie_domain else self.get_cookie_domain(app)
+        else:
+            domain = self.get_cookie_domain(app)
+        path = self.cookie_path or self.get_cookie_path(app)
+
+        store_id = self.key_prefix + session.get_sid(self.cookie_name)
+        if PY2 and isinstance(store_id, unicode):
+            store_id = store_id.encode('utf-8')
+        if not session:
+            if session.modified:
+                try:
+                    self.client.delete(store_id)
+                except Exception as e:
+                    log.error(f'Error while deleting session (session id: {store_id}): {e}')
+                response.delete_cookie(self.cookie_name, domain=domain, path=path)
+            return
+
+        httponly = self.cookie_httponly or self.get_cookie_httponly(app)
+        secure = self.cookie_secure or self.get_cookie_secure(app)
+        expires = self.get_expiration_time(app, session)
+
+        if session.modified:
+            # The session was modified
+            data = {'_permanent': session.is_permanent(self.cookie_name)}
+            data.update(dict(session))
+            val = self.serializer.dumps(data)
+
+            try:
+                log.debug('Setting document to db')
+                self.client.set(store_id, val, self._get_memcache_timeout(total_seconds(expires)))
             except Exception as e:
                 log.error(f'Error while updating session (session id: {store_id}): {e}')
 

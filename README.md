@@ -2,27 +2,46 @@
 
 #### Combine multiple sessions with different backends
 
+With Flask Session Plus you can use multiple different backends and choose what variables are saved on what backend.
 
-Install it with:
+
+
+##### Python version:
+> For the moment it only works on python >= 3.6 (Minor changes have to be done to support python 2 and python 3 >= 3.4)
+
+##### Install it with:
 
 `pip install flask-session-plus`
 
 For Flask Multi Session to work, all you have to do is define all your sessions on a simple configuration variable called `SESSION_CONFIG`, and init the extension.
 
 
-Session Configuration Example:
+##### Session Configuration Example:
 
 ```python
+# example using the Google Firestore backend
+from google.cloud import firestore
+
 SESSION_CONFIG = [
+    # First session will store the csrf_token only on it's own cookie.
     {
         'cookie_name': 'csrf',
         'session_type': 'secure_cookie',
         'session_fields': ['csrf_token'],
     },
+    # Second session will store the user logged in inside the firestore sessions collection.
     {
         'cookie_name': 'session',
         'session_type': 'firestore',
         'session_fields': ['user_id', 'user_data'],
+        'client': firestore.Client(),
+        'collection': 'sessions',
+    },
+    # Third session will store any other values set on the Flask session on it's own secure cookie
+    {
+        'cookie_name': 'data',
+        'session_type': 'secure_cookie',
+        'session_fields': 'auto'
     },
     # ... as many sessions as you want 
 ]
@@ -65,14 +84,16 @@ session.init_app(app)
 
 - Secure Cookies Sessions
 - Google Firestore Sessions
-
-But working on:
-
 - Redis Sessions
-- SqlAlchemy Sessions
 - MongoDB Sessions
 - Memcache Sessions
 
+
+More Backend Session Interfaces can be created by subclassing `BackendSessionInterface` and overwriting the following methods:
+
+  1. `__init__`
+  1. `open_session`
+  1. `save_session`
 
 ### All posible values for Session configuration:
 
@@ -101,12 +122,32 @@ But working on:
     Property name | Required | Default | Description
     --- | :---: | --- | ---
     `session_lifetime` | `False` | `timedelta(days=1)` | The duration for a valid session. Not used on SecureCookie backend.  
-
+    `key_prefix` | `False` | `'session'` | The prefix to use in the store_id.
+    `use_signer` | `False` | `False` | Whether to sign the session id cookie or not.
+    
 - Properties available for the Google Firestore backend:
 
      Property name | Required | Default | Description
     --- | :---: | --- | ---
     `client` | `True` |  | The engine. An instance of firestore.Client.
     `collection` | `True` |  | The firestore collection you want to use to store sessions.
-    `key_prefix` | `False` | `'session'` | The prefix to use in the document_id.
-    `use_signer` | `False` | `False` | Whether to sign the session id cookie or not.
+    
+- Properties available for the Redis backend:
+
+     Property name | Required | Default | Description
+    --- | :---: | --- | ---
+    `client` | `True` |  | The engine. An instance of redis.Redis.
+
+- Properties available for the MongoDB backend:
+
+     Property name | Required | Default | Description
+    --- | :---: | --- | ---
+    `client` | `True` |  | The engine. An instance of redis.Redis.
+    `db` | `True` |  | The database you want to use.
+    `collection` | `True` |  | The mongodb collection you want to use to store sessions.
+
+- Properties available for the Memcache backend:
+
+     Property name | Required | Default | Description
+    --- | :---: | --- | ---
+    `client` | `True` |  | The engine. An instance of memcache.Client.
