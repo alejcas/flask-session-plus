@@ -1,9 +1,18 @@
 from flask.sessions import SessionInterface as FlaskSessionInterface
 from flask_session_plus.backends import SecureCookieSessionInterface, FirestoreSessionInterface
+from flask_session_plus.backends import RedisSessionInterface, MongoDBSessionInterface, MemcachedSessionInterface
 from flask_session_plus.core import MultiSession
 
 
 class MultiSessionInterface(FlaskSessionInterface):
+
+    backends = {
+        'secure_cookie': SecureCookieSessionInterface,
+        'firestore': FirestoreSessionInterface,
+        'redis': RedisSessionInterface,
+        'mongodb': MongoDBSessionInterface,
+        'memcache': MemcachedSessionInterface,
+    }
 
     def __init__(self, sessions_config):
         all_includes = []  # store all the defined includes
@@ -28,10 +37,13 @@ class MultiSessionInterface(FlaskSessionInterface):
         for session_conf in sessions_config:
             session_fields = session_conf.get('session_fields')
             session_type = session_conf.pop('session_type')
-            if session_type == 'secure_cookie':
-                self.session_interfaces.append((SecureCookieSessionInterface(**session_conf), session_fields))
-            elif session_type == 'firestore':
-                self.session_interfaces.append((FirestoreSessionInterface(**session_conf), session_fields))
+
+            backend = self.backends.get(session_type)
+            if backend:
+                session_interface = (backend(**session_conf), session_fields)
+                self.session_interfaces.append(session_interface)
+            else:
+                raise ValueError('Specified session_type not recognized as a valid one.')
 
     @staticmethod
     def get_session_for(session_interface, session, session_fields):
@@ -106,33 +118,8 @@ class Session(object):
     def init_app(self, app):
         app.session_interface = self.create_session_interface(app)
 
-    def create_session_interface(self, app):
-        # Config vars:
-
-        # From flask session:
-        # SESSION_COOKIE_NAME
-        # SESSION_COOKIE_DOMAIN
-        # SESSION_COOKIE_PATH
-        # SESSION_COOKIE_HTTPONLY
-        # SESSION_COOKIE_SECURE
-        # PERMANENT_SESSION_LIFETIME
-
-        # From Flask Session:
-        # SESSION_TYPE
-        # SESSION_PERMANENT
-        # SESSION_USE_SIGNER
-        # SESSION_KEY_PREFIX
-        # SESSION_REDIS
-        # SESSION_MEMCACHED
-        # SESSION_FILE_DIR
-        # SESSION_FILE_THRESHOLD
-        # SESSION_FILE_MODE
-        # SESSION_MONGODB
-        # SESSION_MONGODB_DB
-        # SESSION_MONGODB_COLLECT
-        # SESSION_SQLALCHEMY
-        # SESSION_SQLALCHEMY_TABLE
-
+    @staticmethod
+    def create_session_interface(app):
         sessions_config = app.config.get('SESSION_CONFIG', [])
         if not sessions_config:
             # add the default session
@@ -142,7 +129,7 @@ class Session(object):
                 'cookie_path': app.config.get('SESSION_COOKIE_PATH'),
                 'cookie_httponly': app.config.get('SESSION_COOKIE_HTTPONLY'),
                 'cookie_secure': app.config.get('SESSION_COOKIE_SECURE'),
-                'cookie_lifetime': app.config.get('PERMANENT_SESSION_LIFETIME'),
+                'cookie_max_age': None,
             })
 
         for session in sessions_config:
