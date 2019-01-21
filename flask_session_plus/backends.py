@@ -224,7 +224,7 @@ class FirestoreSessionInterface(BackendSessionInterface):
         try:
             self.store.document(store_id).delete()
         except Exception as e:
-            log.error(f'Error while deleting expired session (session id: {store_id}): {e}')
+            log.error('Error while deleting expired session (session id: {}): {}'.format(store_id, str(e)))
             return False
         return True
 
@@ -246,11 +246,10 @@ class FirestoreSessionInterface(BackendSessionInterface):
 
         store_id = self.key_prefix + sid
         try:
-            log.debug('Getting document from db')
             document = self.store.document(store_id).get()
             document = document.to_dict() if document.exists else None
         except Exception as e:
-            log.error(f'Error while retrieving session from db (session id: {store_id}): {e}')
+            log.error('Error while retrieving session from db (session id: {}): {}'.format(store_id, str(e)))
             # treat as session expired.
             document = None
         if document and document.pop('_expiration') <= datetime.utcnow().replace(tzinfo=utc):
@@ -289,10 +288,9 @@ class FirestoreSessionInterface(BackendSessionInterface):
             val = {'_expiration': expires, '_permanent': session.is_permanent(self.cookie_name)}
             val.update(dict(session))
             try:
-                log.debug('Setting document to db')
                 self.store.document(store_id).set(val)
             except Exception as e:
-                log.error(f'Error while updating session (session id: {store_id}): {e}')
+                log.error('Error while updating session (session id: {}): {}'.format(store_id, str(e)))
 
         if self.use_signer:
             session_id = self._get_signer(app).sign(want_bytes(session.get_sid(self.cookie_name)))
@@ -329,7 +327,7 @@ class RedisSessionInterface(BackendSessionInterface):
         try:
             self.client.delete(store_id)
         except Exception as e:
-            log.error(f'Error while deleting expired session (session id: {store_id}): {e}')
+            log.error('Error while deleting expired session (session id: {}): {}'.format(store_id, str(e)))
             return False
         return True
 
@@ -354,10 +352,9 @@ class RedisSessionInterface(BackendSessionInterface):
 
         store_id = self.key_prefix + sid
         try:
-            log.debug('Getting document from db')
             val = self.client.get(store_id)
         except Exception as e:
-            log.error(f'Error while retrieving session from db (session id: {store_id}): {e}')
+            log.error('Error while retrieving session from db (session id: {}): {}'.format(store_id, str(e)))
             # treat as session expired.
             val = None
 
@@ -398,10 +395,9 @@ class RedisSessionInterface(BackendSessionInterface):
             data.update(dict(session))
             val = self.serializer.dumps(data)
             try:
-                log.debug('Setting document to db')
                 self.client.setex(name=store_id, value=val, time=total_seconds(expires))
             except Exception as e:
-                log.error(f'Error while updating session (session id: {store_id}): {e}')
+                log.error('Error while updating session (session id: {}): {}'.format(store_id, str(e)))
 
         if self.use_signer:
             session_id = self._get_signer(app).sign(want_bytes(session.get_sid(self.cookie_name)))
@@ -442,7 +438,7 @@ class MongoDBSessionInterface(BackendSessionInterface):
         try:
             self.store.remove({'id': store_id})
         except Exception as e:
-            log.error(f'Error while deleting expired session (session id: {store_id}): {e}')
+            log.error('Error while deleting expired session (session id: {}): {}'.format(store_id, str(e)))
             return False
         return True
 
@@ -464,10 +460,9 @@ class MongoDBSessionInterface(BackendSessionInterface):
 
         store_id = self.key_prefix + sid
         try:
-            log.debug('Getting document from db')
             document = self.store.find_one({'id': store_id})
         except Exception as e:
-            log.error(f'Error while retrieving session from db (session id: {store_id}): {e}')
+            log.error('Error while retrieving session from db (session id: {}): {}'.format(store_id, str(e)))
             # treat as session expired.
             document = None
         if document and document.pop('_expiration') <= datetime.utcnow().replace(tzinfo=utc):
@@ -506,14 +501,13 @@ class MongoDBSessionInterface(BackendSessionInterface):
             store_id = self.key_prefix + session.get_sid(self.cookie_name)
             val = self.serializer.dumps(dict(session))
             try:
-                log.debug('Setting document to db')
                 self.store.update({'id': store_id},
                                   {'id': store_id,
                                    'val': val,
                                    '_expiration': expires,
                                    '_permanent': session.is_permanent(self.cookie_name)}, True)
             except Exception as e:
-                log.error(f'Error while updating session (session id: {store_id}): {e}')
+                log.error('Error while updating session (session id: {}): {}'.format(store_id, str(e)))
 
         if self.use_signer:
             session_id = self._get_signer(app).sign(want_bytes(session.get_sid(self.cookie_name)))
@@ -582,10 +576,9 @@ class MemcachedSessionInterface(BackendSessionInterface):
         if PY2 and isinstance(store_id, unicode):
             store_id = store_id.encode('utf-8')
         try:
-            log.debug('Getting document from db')
             val = self.client.get(store_id)
         except Exception as e:
-            log.error(f'Error while retrieving session from db (session id: {store_id}): {e}')
+            log.error('Error while retrieving session from db (session id: {}): {}'.format(store_id, str(e)))
             # treat as session expired.
             val = None
         if val is not None:
@@ -614,7 +607,7 @@ class MemcachedSessionInterface(BackendSessionInterface):
                 try:
                     self.client.delete(store_id)
                 except Exception as e:
-                    log.error(f'Error while deleting session (session id: {store_id}): {e}')
+                    log.error('Error while deleting session (session id: {}): {}'.format(store_id, str(e)))
                 response.delete_cookie(self.cookie_name, domain=domain, path=path)
             return
 
@@ -629,10 +622,9 @@ class MemcachedSessionInterface(BackendSessionInterface):
             val = self.serializer.dumps(data)
 
             try:
-                log.debug('Setting document to db')
                 self.client.set(store_id, val, self._get_memcache_timeout(total_seconds(expires)))
             except Exception as e:
-                log.error(f'Error while updating session (session id: {store_id}): {e}')
+                log.error('Error while updating session (session id: {}): {}'.format(store_id, str(e)))
 
         if self.use_signer:
             session_id = self._get_signer(app).sign(want_bytes(session.get_sid(self.cookie_name)))

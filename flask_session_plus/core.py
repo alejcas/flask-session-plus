@@ -14,14 +14,6 @@ class UpdateDictMixin(object):
             keys = list(super(UpdateDictMixin, self).keys()) if name == 'clear' else None
             rv = getattr(super(UpdateDictMixin, self), name)(*args, **kw)
             if self.on_update is not None:
-                # TODO: delete the following comment
-                # if name == '__setitem__':
-                #     if args[0] in self and self.get(args[0]) == args[1]:
-                #         pass
-                #     else:
-                #         self.on_update(self)
-                # else:
-                #     self.on_update(self)
                 if name == 'clear':
                     for key in keys:
                         self.on_update(self, key)

@@ -2,12 +2,13 @@
 
 #### Combine multiple sessions with different backends
 
-With Flask Session Plus you can use multiple different backends and choose what variables are saved on what backend.
-
+With Flask Session Plus you can use multiple different backends and choose what session variables are saved on what backend.
 
 
 ##### Python version:
-> For the moment it only works on python >= 3.6 (Minor changes have to be done to support python 2 and python 3 >= 3.4)
+> It works on python >= 3.4
+> For the moment it should work on python 2.7 but it is not tested yet. If something does not work properly please open a bug report.
+>
 
 ##### Install it with:
 
@@ -49,13 +50,13 @@ SESSION_CONFIG = [
 
 > Caution: session_fields can collide if they have the same name and the same meaning. If they don't have the same meaning, you must use different field names.
 
-The above configuration will define two session interfaces.
-The first one is a secure cookie with 'csrf' name that will store the 'csrf_token' field.
+The above configuration will define three session interfaces:
 
-The second one is a FirestoreSessionInterface that will set a cookie named 'session' with a single session id.
-The 'user_id' and 'user_data' will be stored in the Google Cloud Firestore backend.
+- The first one is a secure cookie with 'csrf' name that will store the 'csrf_token' field.
+- The second one is a FirestoreSessionInterface that will set a cookie named 'session' with a single session id. The 'user_id' and 'user_data' will be stored in the Google Cloud Firestore backend.
+- The third one will store any other varibles stored in the session on another secure cookie.
 
-Finally register it as an extension:
+After configuring just register it as an extension:
 
 ```python
 from flask_session_plus import Session
@@ -82,11 +83,11 @@ session.init_app(app)
 
 ### Current available backends:
 
-- Secure Cookies Sessions
-- Google Firestore Sessions
-- Redis Sessions
-- MongoDB Sessions
-- Memcache Sessions
+- Secure Cookies Sessions (session_type key: `'secure_cookie'`)
+- Google Firestore Sessions (session_type key: `'firestore'`)
+- Redis Sessions (session_type key: `'redis'`)
+- MongoDB Sessions (session_type key: `'mongodb'`)
+- Memcache Sessions (session_type key: `'memcache'`)
 
 
 More Backend Session Interfaces can be created by subclassing `BackendSessionInterface` and overwriting the following methods:
