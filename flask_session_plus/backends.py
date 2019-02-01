@@ -27,6 +27,7 @@ class BaseSessionInterface(FlaskSessionInterface):
     def __init__(self, cookie_name, cookie_max_age=None, cookie_domain=None,
                  cookie_path=None, cookie_httponly=True, cookie_secure=False,
                  cookie_samesite=None, session_lifetime=None,
+                 session_permanent_lifetime=None,
                  refresh_on_request=True, **kwargs):
         self.cookie_name = cookie_name
         self.cookie_max_age = cookie_max_age
@@ -36,6 +37,7 @@ class BaseSessionInterface(FlaskSessionInterface):
         self.cookie_secure = cookie_secure
         self.cookie_samesite = cookie_samesite
         self.session_lifetime = session_lifetime or timedelta(days=1)
+        self.session_permanent_lifetime = session_permanent_lifetime or timedelta(days=31)
         self.refresh_on_request = refresh_on_request
 
     def get_expiration_time(self, app, session):
@@ -45,7 +47,7 @@ class BaseSessionInterface(FlaskSessionInterface):
         lifetime configured on the application.
         """
         if session.is_permanent(self.cookie_name):
-            return datetime.utcnow() + timedelta(days=31)
+            return datetime.utcnow() + self.session_permanent_lifetime
         else:
             return datetime.utcnow() + self.session_lifetime
 
@@ -56,7 +58,7 @@ class BaseSessionInterface(FlaskSessionInterface):
         lifetime configured on the application.
         """
         if session.is_permanent(self.cookie_name):
-            return datetime.utcnow() + timedelta(days=31)
+            return datetime.utcnow() + self.session_permanent_lifetime
         else:
             if self.cookie_max_age is not None:
                 return datetime.utcnow() + timedelta(seconds=self.cookie_max_age)
@@ -177,11 +179,6 @@ class BackendSessionInterface(BaseSessionInterface):
     """ A common Session Interface for all backend Interfaces """
 
     session_class = MultiSession
-
-    def __init__(self, *args, **kwargs):
-        if 'session_lifetime' not in kwargs:
-            kwargs['session_lifetime'] = timedelta(days=1)  # by default the session lasts 1 day.
-        super(BackendSessionInterface, self).__init__(*args, **kwargs)
 
     def _generate_sid(self):
         return str(uuid4())

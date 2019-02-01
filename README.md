@@ -123,6 +123,7 @@ More Backend Session Interfaces can be created by subclassing `BackendSessionInt
     Property name | Required | Default | Description
     --- | :---: | --- | ---
     `session_lifetime` | `False` | `timedelta(days=1)` | The duration for a valid session. Not used on SecureCookie backend.  
+    `session_permanent_lifetime` | `False` | `timedelta(days=31)` | The duration for a valid session when it's marked as permanent. Not used on SecureCookie backend.
     `key_prefix` | `False` | `'session'` | The prefix to use in the store_id.
     `use_signer` | `False` | `False` | Whether to sign the session id cookie or not.
     
