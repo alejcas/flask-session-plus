@@ -1,4 +1,4 @@
-Flask==1.0.2
+Flask==2.3.2
 pytz==2018.7
 requests==2.21.0
 twine==1.12.1
