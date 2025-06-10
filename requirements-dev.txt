@@ -1,6 +1,6 @@
 Flask==2.3.2
 pytz==2018.7
-requests==2.32.0
+requests==2.32.4
 twine==1.12.1
 wheel==0.38.1
 Click==7.0
